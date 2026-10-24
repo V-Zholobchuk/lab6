@@ -47,14 +47,14 @@
                         <td>
                             {% if u['id'] != current_user['id'] %}
                                 <div style="display:flex; gap:6px;">
-                                    <form method="POST" action="{{ url_for('admin_toggle_lock', target_id=u['id']) }}">
+                                    <form method="POST" action="{{ url_for('admin.toggle_lock', target_id=u['id']) }}">
                                         {% if u['is_locked_by_admin'] or u['locked_until'] %}
                                             <button type="submit" class="btn btn-success btn-sm">Розблокувати</button>
                                         {% else %}
                                             <button type="submit" class="btn btn-danger btn-sm">Заблокувати</button>
                                         {% endif %}
                                     </form>
-                                    <form method="POST" action="{{ url_for('admin_toggle_role', target_id=u['id']) }}">
+                                    <form method="POST" action="{{ url_for('admin.toggle_role', target_id=u['id']) }}">
                                         <button type="submit" class="btn btn-secondary btn-sm">Роль</button>
                                     </form>
                                 </div>

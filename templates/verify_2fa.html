@@ -8,7 +8,7 @@
         Користувач: <b>{{ user['username'] }}</b> (метод: {{ user['two_fa_method']|upper }})
     </p>
 
-    <form method="POST" action="{{ url_for('verify_2fa') }}">
+    <form method="POST" action="{{ url_for('auth.verify_2fa') }}">
         <div class="form-group">
             {% if user['two_fa_method'] == 'email' %}
                 <label for="otp_code">Введіть 6-значний код, надісланий на {{ user['email'] }}</label>

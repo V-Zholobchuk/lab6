@@ -162,16 +162,16 @@
         <a href="{{ url_for('index') }}" class="brand">AuthSystem</a>
         <div class="nav-links">
             {% if current_user %}
-                <a href="{{ url_for('profile') }}" class="nav-link">
+                <a href="{{ url_for('profile.view_profile') }}" class="nav-link">
                     Профіль ({{ current_user['username'] }})
                 </a>
                 {% if current_user['role'] == 'admin' %}
-                    <a href="{{ url_for('admin_dashboard') }}" class="nav-link">Адмін-панель</a>
+                    <a href="{{ url_for('admin.dashboard') }}" class="nav-link">Адмін-панель</a>
                 {% endif %}
-                <a href="{{ url_for('logout') }}" class="nav-link">Вийти</a>
+                <a href="{{ url_for('auth.logout') }}" class="nav-link">Вийти</a>
             {% else %}
-                <a href="{{ url_for('login') }}" class="nav-link">Вхід</a>
-                <a href="{{ url_for('register') }}" class="nav-link">Реєстрація</a>
+                <a href="{{ url_for('auth.login') }}" class="nav-link">Вхід</a>
+                <a href="{{ url_for('auth.register') }}" class="nav-link">Реєстрація</a>
             {% endif %}
         </div>
     </div>
