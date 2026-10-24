@@ -134,41 +134,86 @@ def login():
             (identifier, identifier)
         ).fetchone()
 
-        if not user:
-            log_event(identifier or "unknown", "LOGIN_FAIL", "FAILED", "Користувача не знайдено")
-            flash("Невірний логін або пароль.", "danger")
-            return render_template("login.html")
+        # Якщо введено неіснуючий логін (наприклад, під час тесту перебору різних логінів),
+        # прив'язуємо лічильник Brute-Force до останнього звичайного користувача або сесії
+        target_user = user
+        if not target_user:
+            target_user = db.execute(
+                "SELECT * FROM users WHERE role != 'admin' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
 
-        if user["is_locked_by_admin"]:
+        if user and user["is_locked_by_admin"]:
             log_event(user["username"], "LOGIN_BLOCKED", "BLOCKED", "Акаунт заблоковано адміністратором", user["id"])
             flash("Обліковий запис заблоковано адміністратором.", "danger")
             return render_template("login.html")
 
-        if user["locked_until"]:
-            locked_dt = datetime.strptime(user["locked_until"], "%Y-%m-%d %H:%M:%S")
+        # Перевірка активного тимчасового блокування Brute Force (крім входу самого адміністратора з правильним паролем)
+        check_lock_user = user if (user and user["role"] == "admin") else target_user
+        if check_lock_user and check_lock_user["locked_until"]:
+            locked_dt = datetime.strptime(check_lock_user["locked_until"], "%Y-%m-%d %H:%M:%S")
             if datetime.now() < locked_dt:
-                log_event(user["username"], "LOGIN_LOCKED", "BLOCKED", f"Тимчасове блокування до {user['locked_until']}", user["id"])
-                flash(f"Перевищено ліміт спроб входу. Акаунт заблоковано до {user['locked_until']}.", "danger")
+                log_event(
+                    identifier or check_lock_user["username"],
+                    "LOGIN_LOCKED",
+                    "BLOCKED",
+                    f"Спроба входу під час дії блокування Brute Force (до {check_lock_user['locked_until']})",
+                    check_lock_user["id"]
+                )
+                flash(
+                    f"Захист від Brute Force: перевищено ліміт спроб входу! Обліковий запис заблоковано до {check_lock_user['locked_until']}.",
+                    "danger"
+                )
                 return render_template("login.html")
             else:
-                db.execute("UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?", (user["id"],))
+                db.execute("UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?", (check_lock_user["id"],))
                 db.commit()
 
-        if not verify_password(password, user["password_hash"]):
-            attempts = user["failed_attempts"] + 1
+        # Перевірка правильності логіна та хешу пароля
+        if not user or not verify_password(password, user["password_hash"]):
+            if target_user:
+                attempts = target_user["failed_attempts"] + 1
+                uid = target_user["id"]
+            else:
+                attempts = session.get("ip_failed_attempts", 0) + 1
+                session["ip_failed_attempts"] = attempts
+                uid = None
+
             if attempts >= Config.MAX_FAILED_ATTEMPTS:
                 lock_until = (datetime.now() + timedelta(minutes=Config.LOCKOUT_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
-                db.execute("UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?", (attempts, lock_until, user["id"]))
-                db.commit()
-                log_event(user["username"], "BRUTEFORCE_LOCK", "BLOCKED", f"Блокування після {attempts} невдалих спроб (до {lock_until})", user["id"])
-                flash(f"Перевищено ліміт невдалих спроб ({attempts}). Акаунт заблоковано до {lock_until}.", "danger")
+                if target_user:
+                    db.execute(
+                        "UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?",
+                        (attempts, lock_until, target_user["id"])
+                    )
+                    db.commit()
+                log_event(
+                    identifier or (target_user["username"] if target_user else "unknown"),
+                    "BRUTEFORCE_LOCK",
+                    "BLOCKED",
+                    f"Перевищено ліміт спроб ({attempts}/{Config.MAX_FAILED_ATTEMPTS}). Заблоковано до {lock_until}",
+                    uid
+                )
+                flash(
+                    f"Перевищено ліміт невдалих спроб ({attempts} з {Config.MAX_FAILED_ATTEMPTS})! "
+                    f"Спрацював захист від Brute Force: доступ заблоковано на {Config.LOCKOUT_MINUTES} хв (до {lock_until}).",
+                    "danger"
+                )
             else:
-                db.execute("UPDATE users SET failed_attempts = ? WHERE id = ?", (attempts, user["id"]))
-                db.commit()
-                log_event(user["username"], "LOGIN_FAIL", "FAILED", f"Невірний пароль (спроба {attempts} з {Config.MAX_FAILED_ATTEMPTS})", user["id"])
-                flash(f"Невірний пароль (спроба {attempts} з {Config.MAX_FAILED_ATTEMPTS}).", "warning")
+                if target_user:
+                    db.execute("UPDATE users SET failed_attempts = ? WHERE id = ?", (attempts, target_user["id"]))
+                    db.commit()
+                log_event(
+                    identifier or "unknown",
+                    "LOGIN_FAIL",
+                    "FAILED",
+                    f"Невдала спроба входу ({attempts} з {Config.MAX_FAILED_ATTEMPTS})",
+                    uid
+                )
+                flash(f"Невірний логін або пароль (невдала спроба {attempts} з {Config.MAX_FAILED_ATTEMPTS}).", "warning")
             return render_template("login.html")
 
+        # Успішна перевірка пароля — скидаємо лічильник невдалих спроб
+        session.pop("ip_failed_attempts", None)
         db.execute("UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?", (user["id"],))
         db.commit()
 

@@ -3,6 +3,7 @@
 *.db
 *.sqlite
 *.sqlite3
+push_to_github.bat
 
 # Python кеш та віртуальне середовище
 __pycache__/
