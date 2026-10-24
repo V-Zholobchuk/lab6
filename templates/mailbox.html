@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Надіслані листи{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 style="margin:0;">Вхідні листи (тестова поштова скринька)</h3>
+        {% if emails %}
+            <form method="POST" action="{{ url_for('clear_mailbox') }}">
+                <button type="submit" class="btn btn-secondary btn-sm">Очистити</button>
+            </form>
+        {% endif %}
+    </div>
+
+    {% if not emails %}
+        <p style="color:#6c757d; font-size:14px;">Листів немає.</p>
+    {% else %}
+        {% for mail in emails %}
+            <div style="border:1px solid #dee2e6; border-radius:4px; padding:12px; margin-bottom:12px; background:#f8f9fa;">
+                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #dee2e6; padding-bottom:6px; margin-bottom:8px;">
+                    <div>
+                        <b>{{ mail['subject'] }}</b>
+                        <div style="font-size:12px; color:#6c757d;">
+                            Кому: {{ mail['recipient'] }} | Час: {{ mail['created_at'] }}
+                            {% if mail['expires_at'] %} | Діє до: {{ mail['expires_at'] }}{% endif %}
+                        </div>
+                    </div>
+                    {% if mail['action_url'] %}
+                        <a href="{{ mail['action_url'] }}" class="btn btn-primary btn-sm">Перейти за посиланням</a>
+                    {% endif %}
+                </div>
+                <div style="font-size:13px;">
+                    {{ mail['body_html'] | safe }}
+                </div>
+            </div>
+        {% endfor %}
+    {% endif %}
+</div>
+{% endblock %}

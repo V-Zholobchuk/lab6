@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Реєстрація{% endblock %}
+
+{% block content %}
+<div class="card auth-card">
+    <h2>Реєстрація</h2>
+
+    <form method="POST" action="{{ url_for('register') }}">
+        <div class="form-group">
+            <label for="username">Логін</label>
+            <input type="text" id="username" name="username" required value="{{ form_data.get('username', '') }}">
+        </div>
+
+        <div class="form-group">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" required value="{{ form_data.get('email', '') }}">
+        </div>
+
+        <div class="form-group">
+            <label for="password">Пароль</label>
+            <input type="password" id="password" name="password" required oninput="checkPassword()">
+
+            <div style="margin-top:6px;">
+                <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:3px;">
+                    <span>Надійність пароля:</span>
+                    <span id="strengthLabel" style="font-weight:bold; color:#6c757d;">-</span>
+                </div>
+                <div style="height:6px; width:100%; background:#e9ecef; border-radius:3px; overflow:hidden;">
+                    <div id="strengthBar" style="height:100%; width:0%; background:#dc3545; transition:width 0.2s;"></div>
+                </div>
+            </div>
+
+            <ul style="margin:8px 0 0 0; padding-left:18px; font-size:12px; color:#6c757d;">
+                <li id="r-len">Не менше 8 символів</li>
+                <li id="r-case">Великі та малі літери</li>
+                <li id="r-dig">Хоча б одна цифра</li>
+                <li id="r-spec">Спеціальний символ (!@#$%^&* тощо)</li>
+            </ul>
+        </div>
+
+        <div class="form-group">
+            <label for="confirm_password">Повторіть пароль</label>
+            <input type="password" id="confirm_password" name="confirm_password" required>
+        </div>
+
+        <div class="form-group">
+            <label>Перевірка CAPTCHA</label>
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+                <img id="captchaImg" src="{{ captcha_svg }}" alt="captcha" style="height:50px;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="reloadCaptcha()">Оновити</button>
+            </div>
+            <input type="text" name="captcha" required placeholder="Введіть символи з картинки" autocomplete="off">
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block">Зареєструватися</button>
+    </form>
+
+    <div style="margin-top:14px; text-align:center; font-size:13px;">
+        Вже є акаунт? <a href="{{ url_for('login') }}" style="color:#0d6efd;">Увійти</a>
+    </div>
+</div>
+
+<script>
+function mark(id, ok) {
+    document.getElementById(id).style.color = ok ? "#198754" : "#dc3545";
+}
+
+function checkPassword() {
+    const p = document.getElementById("password").value;
+    const lenOk = p.length >= 8;
+    const caseOk = /[A-ZА-ЯІЇЄҐ]/.test(p) && /[a-zа-яіїєґ]/.test(p);
+    const digOk = /[0-9]/.test(p);
+    const specOk = /[^A-Za-zА-Яа-яІіЇїЄєҐґ0-9]/.test(p);
+
+    mark("r-len", lenOk);
+    mark("r-case", caseOk);
+    mark("r-dig", digOk);
+    mark("r-spec", specOk);
+
+    let score = 0;
+    if (lenOk) score += 25;
+    if (caseOk) score += 25;
+    if (digOk) score += 25;
+    if (specOk) score += 25;
+
+    const bar = document.getElementById("strengthBar");
+    const lbl = document.getElementById("strengthLabel");
+    bar.style.width = score + "%";
+
+    if (score <= 25) {
+        bar.style.background = "#dc3545";
+        lbl.textContent = "Слабкий";
+        lbl.style.color = "#dc3545";
+    } else if (score < 100) {
+        bar.style.background = "#ffc107";
+        lbl.textContent = "Середній";
+        lbl.style.color = "#b48600";
+    } else {
+        bar.style.background = "#198754";
+        lbl.textContent = "Надійний";
+        lbl.style.color = "#198754";
+    }
+}
+
+async function reloadCaptcha() {
+    const r = await fetch("{{ url_for('refresh_captcha') }}");
+    const d = await r.json();
+    document.getElementById("captchaImg").src = d.svg_uri;
+}
+</script>
+{% endblock %}

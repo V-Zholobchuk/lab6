@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Підтвердження 2FA{% endblock %}
+
+{% block content %}
+<div class="card auth-card">
+    <h2>Двофакторна автентифікація</h2>
+    <p style="font-size:13px; color:#495057;">
+        Користувач: <b>{{ user['username'] }}</b> (метод: {{ user['two_fa_method']|upper }})
+    </p>
+
+    <form method="POST" action="{{ url_for('verify_2fa') }}">
+        <div class="form-group">
+            <label for="otp_code">Введіть 6-значний одноразовий код</label>
+            <input type="text" id="otp_code" name="otp_code" required maxlength="6" autocomplete="off">
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">Підтвердити</button>
+    </form>
+
+    {% if user['two_fa_method'] == 'totp' %}
+        <div style="margin-top:14px; font-size:12px; color:#6c757d;">
+            Поточний TOTP-код (для тесту): <code>{{ current_totp_demo }}</code>
+        </div>
+    {% else %}
+        <div style="margin-top:14px; font-size:12px; color:#6c757d;">
+            Перевірте код у вкладці <a href="{{ url_for('mailbox') }}" target="_blank">Листи</a>.
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Вхід{% endblock %}
+
+{% block content %}
+<div class="card auth-card">
+    <h2>Вхід у систему</h2>
+
+    <form method="POST" action="{{ url_for('login') }}">
+        <div class="form-group">
+            <label for="identifier">Логін або Email</label>
+            <input type="text" id="identifier" name="identifier" required>
+        </div>
+
+        <div class="form-group">
+            <div style="display:flex; justify-content:space-between;">
+                <label for="password">Пароль</label>
+                <a href="{{ url_for('forgot_password') }}" style="font-size:12px; color:#0d6efd; text-decoration:none;">Забули пароль?</a>
+            </div>
+            <input type="password" id="password" name="password" required>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block">Увійти</button>
+    </form>
+
+    <hr style="border:none; border-top:1px solid #dee2e6; margin:18px 0;">
+
+    <div style="font-size:13px; color:#6c757d; margin-bottom:8px; text-align:center;">Вхід через зовнішній сервіс (OpenID Connect):</div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+        <a href="{{ url_for('oauth_login', provider='google') }}" class="btn btn-secondary">Google</a>
+        <a href="{{ url_for('oauth_login', provider='github') }}" class="btn btn-secondary">GitHub</a>
+    </div>
+
+    <div style="margin-top:16px; text-align:center; font-size:13px;">
+        Немає акаунта? <a href="{{ url_for('register') }}" style="color:#0d6efd;">Зареєструватися</a>
+    </div>
+</div>
+{% endblock %}

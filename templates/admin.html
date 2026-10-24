@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Адмін-панель{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h3>Користувачі системи</h3>
+    <div style="overflow-x:auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Логін</th>
+                    <th>Email</th>
+                    <th>Роль</th>
+                    <th>Активація</th>
+                    <th>2FA</th>
+                    <th>Невдалі спроби</th>
+                    <th>Статус</th>
+                    <th>Дії</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for u in users %}
+                    <tr>
+                        <td>{{ u['id'] }}</td>
+                        <td><b>{{ u['username'] }}</b></td>
+                        <td>{{ u['email'] }}</td>
+                        <td>{{ u['role'] }}</td>
+                        <td>
+                            {% if u['is_active'] %}
+                                <span class="badge badge-success">Так</span>
+                            {% else %}
+                                <span class="badge badge-warning">Ні</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ u['two_fa_method']|upper if u['two_fa_enabled'] else 'Вимк.' }}</td>
+                        <td>{{ u['failed_attempts'] }}</td>
+                        <td>
+                            {% if u['is_locked_by_admin'] %}
+                                <span class="badge badge-danger">Заблоковано (адмін)</span>
+                            {% elif u['locked_until'] %}
+                                <span class="badge badge-danger">Блок до {{ u['locked_until'] }}</span>
+                            {% else %}
+                                <span class="badge badge-success">Активний</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if u['id'] != current_user['id'] %}
+                                <div style="display:flex; gap:6px;">
+                                    <form method="POST" action="{{ url_for('admin_toggle_lock', target_id=u['id']) }}">
+                                        {% if u['is_locked_by_admin'] or u['locked_until'] %}
+                                            <button type="submit" class="btn btn-success btn-sm">Розблокувати</button>
+                                        {% else %}
+                                            <button type="submit" class="btn btn-danger btn-sm">Заблокувати</button>
+                                        {% endif %}
+                                    </form>
+                                    <form method="POST" action="{{ url_for('admin_toggle_role', target_id=u['id']) }}">
+                                        <button type="submit" class="btn btn-secondary btn-sm">Роль</button>
+                                    </form>
+                                </div>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Статистика спроб входу за користувачами</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Логін / Email</th>
+                <th>Всього записів</th>
+                <th>Успішних</th>
+                <th>Невдалих / Заблокованих</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for st in attempt_stats %}
+                <tr>
+                    <td><b>{{ st['username_or_email'] }}</b></td>
+                    <td>{{ st['total_events'] }}</td>
+                    <td>{{ st['success_cnt'] }}</td>
+                    <td>{{ st['failed_cnt'] }}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="card">
+    <h3>Журнал логування входів</h3>
+    <div style="overflow-x:auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Час</th>
+                    <th>Користувач</th>
+                    <th>IP</th>
+                    <th>Подія</th>
+                    <th>Результат</th>
+                    <th>Опис</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                    <tr>
+                        <td>{{ log['id'] }}</td>
+                        <td>{{ log['created_at'] }}</td>
+                        <td><b>{{ log['username_or_email'] }}</b></td>
+                        <td>{{ log['ip_address'] }}</td>
+                        <td>{{ log['event_type'] }}</td>
+                        <td>
+                            {% if log['status'] == 'SUCCESS' %}
+                                <span class="badge badge-success">{{ log['status'] }}</span>
+                            {% elif log['status'] in ('BLOCKED', 'DENIED') %}
+                                <span class="badge badge-danger">{{ log['status'] }}</span>
+                            {% else %}
+                                <span class="badge badge-warning">{{ log['status'] }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ log['details'] }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
