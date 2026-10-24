@@ -1,16 +1,24 @@
+import io
 import os
 import re
 import hmac
 import time
-import json
 import base64
 import struct
 import random
 import hashlib
 import secrets
+import smtplib
 import sqlite3
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from urllib.parse import urlencode
 from datetime import datetime, timedelta
 from functools import wraps
+
+import requests
+import qrcode
+import qrcode.image.svg
 from flask import (
     Flask, render_template, request, redirect, url_for,
     session, flash, g
@@ -28,7 +36,8 @@ def load_dotenv_file(filepath):
             if not line or line.startswith("#") or "=" not in line:
                 continue
             k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip())
+            v = v.strip().strip('"').strip("'")
+            os.environ[k.strip()] = v
 
 
 load_dotenv_file(os.path.join(BASE_DIR, ".env"))
@@ -136,12 +145,21 @@ def verify_totp(secret: str, code: str) -> bool:
     return False
 
 
+def generate_qr_svg_data_uri(data: str) -> str:
+    factory = qrcode.image.svg.SvgPathImage
+    img = qrcode.make(data, image_factory=factory, box_size=6, border=2)
+    buf = io.BytesIO()
+    img.save(buf)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/svg+xml;base64,{b64}"
+
+
 def generate_captcha_svg() -> tuple[str, str]:
     chars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
     code = "".join(secrets.choice(chars) for _ in range(5))
     w, h = 180, 50
     parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" '
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {height if False else h}" '
         f'style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:4px;">'
     ]
     for _ in range(5):
@@ -160,6 +178,42 @@ def generate_captcha_svg() -> tuple[str, str]:
     parts.append("</svg>")
     b64 = base64.b64encode("".join(parts).encode("utf-8")).decode("ascii")
     return code, f"data:image/svg+xml;base64,{b64}"
+
+
+def send_real_email(recipient: str, subject: str, html_body: str) -> tuple[bool, str]:
+    """
+    Реальна відправка електронного листа через SMTP (наприклад, smtp.gmail.com:587 або smtp.ukr.net:465).
+    """
+    smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com").strip()
+    smtp_port = int(os.environ.get("SMTP_PORT", "587").strip() or "587")
+    smtp_user = os.environ.get("SMTP_USER", "").strip()
+    smtp_password = os.environ.get("SMTP_PASSWORD", "").strip()
+    smtp_from = os.environ.get("SMTP_FROM", smtp_user).strip() or smtp_user
+
+    if not smtp_user or not smtp_password:
+        return False, "Не налаштовано SMTP_USER та SMTP_PASSWORD у файлі .env"
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = smtp_from
+    msg["To"] = recipient
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+    try:
+        if smtp_port == 465:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15) as server:
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+        return True, "OK"
+    except Exception as e:
+        return False, str(e)
 
 
 def init_db():
@@ -215,20 +269,6 @@ def init_db():
         )
     """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS sent_emails (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            recipient TEXT NOT NULL,
-            subject TEXT NOT NULL,
-            body_html TEXT NOT NULL,
-            action_url TEXT DEFAULT NULL,
-            token_type TEXT DEFAULT NULL,
-            expires_at TEXT DEFAULT NULL,
-            is_read INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        )
-    """)
-
     admin_user = os.environ.get("ADMIN_USERNAME", "admin")
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com")
     admin_pwd = os.environ.get("ADMIN_PASSWORD")
@@ -261,16 +301,6 @@ def log_event(username_or_email: str, event_type: str, status: str, details: str
     db.commit()
 
 
-def send_email(recipient: str, subject: str, body_html: str, action_url: str = None, token_type: str = None, expires_at: str = None):
-    db = get_db()
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    db.execute("""
-        INSERT INTO sent_emails (recipient, subject, body_html, action_url, token_type, expires_at, is_read, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
-    """, (recipient, subject, body_html, action_url, token_type, expires_at, now_str))
-    db.commit()
-
-
 def create_token(user_id: int, token_type: str, ttl_minutes: int) -> tuple[str, str]:
     db = get_db()
     db.execute(
@@ -297,9 +327,7 @@ def get_current_user():
 
 @app.context_processor
 def inject_globals():
-    user = get_current_user()
-    unread = get_db().execute("SELECT COUNT(*) AS cnt FROM sent_emails WHERE is_read = 0").fetchone()["cnt"]
-    return dict(current_user=user, unread_emails_count=unread)
+    return dict(current_user=get_current_user())
 
 
 def login_required(f):
@@ -400,14 +428,19 @@ def register():
         act_url = url_for("activate_account", token=token, _external=True)
 
         body = (
+            f"<h3>Підтвердження реєстрації</h3>"
             f"<p>Вітаємо, <b>{username}</b>!</p>"
-            f"<p>Для активації акаунта перейдіть за посиланням: <a href='{act_url}'>{act_url}</a></p>"
-            f"<p>Одноразовий токен: <code>{token}</code> (діє до {expires_str}).</p>"
+            f"<p>Для активації облікового запису перейдіть за посиланням:</p>"
+            f"<p><a href='{act_url}'>{act_url}</a></p>"
+            f"<p><small>Одноразовий токен дійсний до: {expires_str}</small></p>"
         )
-        send_email(email, "Активація облікового запису", body, act_url, "Активація", expires_str)
-        log_event(username, "REGISTER", "SUCCESS", f"Реєстрація ({email}), надіслано токен активації", user_id)
+        ok_mail, err_mail = send_real_email(email, "Активація облікового запису", body)
+        log_event(username, "REGISTER", "SUCCESS", f"Реєстрація ({email}), SMTP={ok_mail}", user_id)
 
-        flash("Реєстрація успішна. Лист для активації надіслано (див. вкладку «Листи»).", "success")
+        if ok_mail:
+            flash(f"Реєстрація успішна! Лист для активації надіслано на {email}.", "success")
+        else:
+            flash(f"Акаунт створено, але не вдалося надіслати email ({err_mail}). Перевірте налаштування SMTP у .env.", "warning")
         return redirect(url_for("login"))
 
     code, svg_uri = generate_captcha_svg()
@@ -434,8 +467,8 @@ def activate_account(token):
     db.commit()
 
     user = db.execute("SELECT * FROM users WHERE id = ?", (row["user_id"],)).fetchone()
-    log_event(user["username"], "ACTIVATE", "SUCCESS", "Акаунт активовано за токеном", user["id"])
-    flash("Обліковий запис успішно активовано.", "success")
+    log_event(user["username"], "ACTIVATE", "SUCCESS", "Акаунт активовано за токеном з пошти", user["id"])
+    flash("Обліковий запис успішно активовано!", "success")
     return redirect(url_for("profile") if session.get("user_id") else url_for("login"))
 
 
@@ -446,9 +479,17 @@ def resend_activation():
     if not user["is_active"]:
         token, expires_str = create_token(user["id"], "activation", ACTIVATION_TTL_MIN)
         act_url = url_for("activate_account", token=token, _external=True)
-        body = f"<p>Нове посилання для активації: <a href='{act_url}'>{act_url}</a></p><p>Діє до: {expires_str}</p>"
-        send_email(user["email"], "Повторна активація акаунта", body, act_url, "Активація", expires_str)
-        flash("Новий лист активації надіслано.", "info")
+        body = (
+            f"<h3>Активація облікового запису</h3>"
+            f"<p>Перейдіть за посиланням для активації акаунта <b>{user['username']}</b>:</p>"
+            f"<p><a href='{act_url}'>{act_url}</a></p>"
+            f"<p><small>Діє до: {expires_str}</small></p>"
+        )
+        ok_mail, err_mail = send_real_email(user["email"], "Повторне посилання для активації", body)
+        if ok_mail:
+            flash(f"Лист із посиланням для активації надіслано на {user['email']}.", "success")
+        else:
+            flash(f"Помилка відправки пошти: {err_mail}", "danger")
     return redirect(url_for("profile"))
 
 
@@ -508,9 +549,16 @@ def login():
                 exp_str = (datetime.now() + timedelta(minutes=OTP_TTL_MIN)).strftime("%Y-%m-%d %H:%M:%S")
                 db.execute("UPDATE users SET email_otp_code = ?, email_otp_expires = ? WHERE id = ?", (otp, exp_str, user["id"]))
                 db.commit()
-                body = f"<p>Ваш одноразовий код для входу (2FA): <b>{otp}</b></p><p>Діє до: {exp_str}</p>"
-                send_email(user["email"], f"Код 2FA: {otp}", body, None, "2FA OTP", exp_str)
-                flash("Код 2FA надіслано на пошту.", "info")
+                body = (
+                    f"<h3>Двофакторна автентифікація (2FA)</h3>"
+                    f"<p>Ваш одноразовий код для входу в систему: <b style='font-size:20px;'>{otp}</b></p>"
+                    f"<p><small>Код дійсний до: {exp_str}</small></p>"
+                )
+                ok_mail, err_mail = send_real_email(user["email"], f"Код підтвердження входу: {otp}", body)
+                if ok_mail:
+                    flash(f"Одноразовий код 2FA надіслано на пошту {user['email']}.", "info")
+                else:
+                    flash(f"Помилка відправки коду на пошту: {err_mail}", "danger")
             return redirect(url_for("verify_2fa"))
 
         session.clear()
@@ -554,8 +602,7 @@ def verify_2fa():
             log_event(user["username"], "2FA_FAIL", "FAILED", "Невірний код 2FA", user["id"])
             flash("Невірний або прострочений код 2FA.", "danger")
 
-    demo_totp = get_totp_token(user["totp_secret"]) if user["totp_secret"] else ""
-    return render_template("verify_2fa.html", user=user, current_totp_demo=demo_totp)
+    return render_template("verify_2fa.html", user=user)
 
 
 @app.route("/logout")
@@ -573,8 +620,9 @@ def profile():
     user = get_current_user()
     db = get_db()
     logs = db.execute("SELECT * FROM login_logs WHERE user_id = ? ORDER BY id DESC LIMIT 8", (user["id"],)).fetchall()
-    totp_code = get_totp_token(user["totp_secret"]) if user["totp_secret"] else ""
-    return render_template("profile.html", user=user, my_logs=logs, current_totp_code=totp_code)
+    otpauth_uri = f"otpauth://totp/AuthSystem:{user['username']}?secret={user['totp_secret']}&issuer=AuthSystem"
+    qr_svg_uri = generate_qr_svg_data_uri(otpauth_uri)
+    return render_template("profile.html", user=user, my_logs=logs, qr_svg_uri=qr_svg_uri)
 
 
 @app.route("/profile/2fa", methods=["POST"])
@@ -599,34 +647,134 @@ def update_2fa():
     return redirect(url_for("profile"))
 
 
+# ==============================================================================
+# РЕАЛЬНА АВТЕНТИФІКАЦІЯ ЧЕРЕЗ GOOGLE OPENID CONNECT ТА GITHUB OAUTH 2.0
+# ==============================================================================
 @app.route("/oauth/login/<provider>")
 def oauth_login(provider):
-    if provider not in ("google", "github"):
-        return redirect(url_for("login"))
     state = secrets.token_urlsafe(16)
     session["oidc_state"] = state
-    return redirect(url_for("oidc_authorize", provider=provider, state=state))
+    redirect_uri = url_for("oauth_callback", provider=provider, _external=True)
+
+    if provider == "google":
+        client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+        if not client_id:
+            flash("Не задано GOOGLE_CLIENT_ID у файлі .env.", "danger")
+            return redirect(url_for("login"))
+        params = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": "openid email profile",
+            "state": state,
+            "access_type": "online",
+            "prompt": "select_account"
+        }
+        return redirect(f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}")
+
+    elif provider == "github":
+        client_id = os.environ.get("GITHUB_CLIENT_ID", "").strip()
+        if not client_id:
+            flash("Не задано GITHUB_CLIENT_ID у файлі .env.", "danger")
+            return redirect(url_for("login"))
+        params = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scope": "read:user user:email",
+            "state": state
+        }
+        return redirect(f"https://github.com/login/oauth/authorize?{urlencode(params)}")
+
+    return redirect(url_for("login"))
 
 
-@app.route("/oauth/authorize/<provider>")
-def oidc_authorize(provider):
-    state = request.args.get("state", "")
-    accounts = [
-        {"name": "Денис (Студент)", "email": f"denis@{provider}.com", "sub": f"{provider}_101"},
-        {"name": "Тестовий Користувач", "email": f"user@{provider}.com", "sub": f"{provider}_202"}
-    ]
-    return render_template("oidc_consent.html", provider=provider, state=state, demo_accounts=accounts)
-
-
-@app.route("/oauth/callback/<provider>", methods=["POST"])
+@app.route("/oauth/callback/<provider>")
 def oauth_callback(provider):
-    state = request.form.get("state", "")
-    if not state or state != session.get("oidc_state"):
-        flash("Помилка перевірки state (OpenID Connect).", "danger")
+    state = request.args.get("state", "")
+    code = request.args.get("code", "")
+    error = request.args.get("error", "")
+
+    if error:
+        flash(f"Відмова авторизації OAuth: {error}", "danger")
         return redirect(url_for("login"))
 
-    email = request.form.get("email", "").strip().lower()
-    sub = request.form.get("sub", f"{provider}_{secrets.token_hex(4)}")
+    if not state or state != session.get("oidc_state"):
+        flash("Помилка безпеки OAuth/OIDC: невірний параметр state.", "danger")
+        return redirect(url_for("login"))
+
+    redirect_uri = url_for("oauth_callback", provider=provider, _external=True)
+    email = None
+    sub = None
+
+    try:
+        if provider == "google":
+            token_res = requests.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": os.environ.get("GOOGLE_CLIENT_ID", "").strip(),
+                    "client_secret": os.environ.get("GOOGLE_CLIENT_SECRET", "").strip(),
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code"
+                },
+                timeout=10
+            ).json()
+
+            access_token = token_res.get("access_token")
+            if not access_token:
+                flash(f"Помилка отримання токена Google: {token_res.get('error_description', token_res)}", "danger")
+                return redirect(url_for("login"))
+
+            userinfo = requests.get(
+                "https://openidconnect.googleapis.com/v1/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10
+            ).json()
+
+            email = userinfo.get("email")
+            sub = str(userinfo.get("sub"))
+
+        elif provider == "github":
+            token_res = requests.post(
+                "https://github.com/login/oauth/access_token",
+                headers={"Accept": "application/json"},
+                data={
+                    "client_id": os.environ.get("GITHUB_CLIENT_ID", "").strip(),
+                    "client_secret": os.environ.get("GITHUB_CLIENT_SECRET", "").strip(),
+                    "code": code,
+                    "redirect_uri": redirect_uri
+                },
+                timeout=10
+            ).json()
+
+            access_token = token_res.get("access_token")
+            if not access_token:
+                flash(f"Помилка отримання токена GitHub: {token_res}", "danger")
+                return redirect(url_for("login"))
+
+            headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
+            user_data = requests.get("https://api.github.com/user", headers=headers, timeout=10).json()
+            sub = str(user_data.get("id"))
+            email = user_data.get("email")
+
+            if not email:
+                emails_list = requests.get("https://api.github.com/user/emails", headers=headers, timeout=10).json()
+                if isinstance(emails_list, list):
+                    for item in emails_list:
+                        if item.get("primary") and item.get("verified"):
+                            email = item.get("email")
+                            break
+                    if not email and emails_list:
+                        email = emails_list[0].get("email")
+    except Exception as e:
+        flash(f"Помилка з'єднання з OAuth-провайдером: {e}", "danger")
+        return redirect(url_for("login"))
+
+    if not email:
+        flash("Не вдалося отримати email від зовнішнього провайдера.", "danger")
+        return redirect(url_for("login"))
+
+    email = email.strip().lower()
     db = get_db()
     user = db.execute("SELECT * FROM users WHERE lower(email)=lower(?)", (email,)).fetchone()
 
@@ -658,7 +806,7 @@ def oauth_callback(provider):
 
     session.pop("oidc_state", None)
     session["user_id"] = user["id"]
-    flash(f"Ви увійшли через {provider.upper()} (OpenID Connect).", "success")
+    flash(f"Ви успішно увійшли через {provider.upper()} ({email}).", "success")
     return redirect(url_for("profile"))
 
 
@@ -672,13 +820,19 @@ def forgot_password():
             token, expires_str = create_token(user["id"], "password_reset", RESET_TTL_MIN)
             reset_url = url_for("reset_password", token=token, _external=True)
             body = (
-                f"<p>Запит на відновлення пароля для <b>{user['username']}</b>.</p>"
-                f"<p>Посилання для скидання пароля: <a href='{reset_url}'>{reset_url}</a></p>"
-                f"<p>Одноразовий токен: <code>{token}</code> (діє до {expires_str}).</p>"
+                f"<h3>Відновлення пароля</h3>"
+                f"<p>Запит на скидання пароля для облікового запису <b>{user['username']}</b>.</p>"
+                f"<p>Для встановлення нового пароля перейдіть за посиланням:</p>"
+                f"<p><a href='{reset_url}'>{reset_url}</a></p>"
+                f"<p><small>Одноразовий токен дійсний до: {expires_str} ({RESET_TTL_MIN} хв)</small></p>"
             )
-            send_email(user["email"], "Відновлення пароля", body, reset_url, "Скидання пароля", expires_str)
-            log_event(user["username"], "RESET_REQUEST", "SUCCESS", f"Надіслано токен відновлення (до {expires_str})", user["id"])
-        flash("Якщо email зареєстровано, лист із посиланням для відновлення надіслано.", "info")
+            ok_mail, err_mail = send_real_email(user["email"], "Відновлення пароля", body)
+            log_event(user["username"], "RESET_REQUEST", "SUCCESS", f"Надіслано токен відновлення (SMTP={ok_mail})", user["id"])
+            if not ok_mail:
+                flash(f"Помилка відправки листа: {err_mail}", "danger")
+                return redirect(url_for("forgot_password"))
+
+        flash(f"Лист із посиланням для відновлення пароля надіслано на {email}.", "info")
         return redirect(url_for("login"))
     return render_template("forgot_password.html")
 
@@ -770,22 +924,6 @@ def admin_toggle_role(target_id):
         db.commit()
         log_event(target["username"], "ROLE_CHANGE", "SUCCESS", f"Змінено роль на {new_role}", target["id"])
     return redirect(url_for("admin_dashboard"))
-
-
-@app.route("/mailbox")
-def mailbox():
-    db = get_db()
-    db.execute("UPDATE sent_emails SET is_read = 1")
-    db.commit()
-    emails = db.execute("SELECT * FROM sent_emails ORDER BY id DESC").fetchall()
-    return render_template("mailbox.html", emails=emails)
-
-
-@app.route("/mailbox/clear", methods=["POST"])
-def clear_mailbox():
-    get_db().execute("DELETE FROM sent_emails")
-    get_db().commit()
-    return redirect(url_for("mailbox"))
 
 
 if __name__ == "__main__":

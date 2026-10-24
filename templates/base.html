@@ -161,9 +161,6 @@
     <div class="navbar">
         <a href="{{ url_for('index') }}" class="brand">AuthSystem</a>
         <div class="nav-links">
-            <a href="{{ url_for('mailbox') }}" class="nav-link">
-                Листи ({{ unread_emails_count }})
-            </a>
             {% if current_user %}
                 <a href="{{ url_for('profile') }}" class="nav-link">
                     Профіль ({{ current_user['username'] }})

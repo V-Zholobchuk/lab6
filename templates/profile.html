@@ -72,7 +72,7 @@
             <div class="form-group">
                 <label for="two_fa_method">Спосіб підтвердження</label>
                 <select id="two_fa_method" name="two_fa_method">
-                    <option value="totp" {% if user['two_fa_method'] == 'totp' %}selected{% endif %}>TOTP (часовий одноразовий код)</option>
+                    <option value="totp" {% if user['two_fa_method'] == 'totp' %}selected{% endif %}>TOTP (Google Authenticator)</option>
                     <option value="email" {% if user['two_fa_method'] == 'email' %}selected{% endif %}>OTP-код на Email</option>
                 </select>
             </div>
@@ -85,9 +85,10 @@
             </div>
         </form>
 
-        <div style="margin-top:16px; padding:10px; background:#f8f9fa; border:1px solid #dee2e6; border-radius:4px; font-size:12px;">
-            <div><b>TOTP секрет:</b> <code>{{ user['totp_secret'] }}</code></div>
-            <div style="margin-top:4px;"><b>Поточний TOTP-код:</b> <code>{{ current_totp_code }}</code></div>
+        <div style="margin-top:16px; padding:12px; background:#f8f9fa; border:1px solid #dee2e6; border-radius:4px; font-size:12px;">
+            <div style="margin-bottom:8px;"><b>QR-код для Google Authenticator (TOTP):</b></div>
+            <img src="{{ qr_svg_uri }}" alt="TOTP QR Code" style="width:150px; height:150px; border:1px solid #dee2e6; background:#fff;">
+            <div style="margin-top:6px;"><b>Секретний ключ:</b> <code>{{ user['totp_secret'] }}</code></div>
         </div>
     </div>
 </div>
